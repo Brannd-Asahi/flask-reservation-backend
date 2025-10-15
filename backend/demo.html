@@ -1,0 +1,269 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Demo Hostal Tucan (API) - UI ampliada</title>
+  <style>
+    body{font-family:Arial;padding:18px; max-width:900px;margin:auto}
+    input, select, button, textarea{margin:6px;padding:8px}
+    .box{border:1px solid #ddd;padding:12px;margin-bottom:12px;border-radius:6px}
+    pre{background:#f6f6f6;padding:8px;border:1px solid #ddd;white-space:pre-wrap}
+    .small { font-size:0.9rem; color:#666; }
+    label{display:block;margin-top:8px}
+  </style>
+</head>
+<body>
+  <h1>Demo API — Hostal Tucan</h1>
+  <div id="status" class="small">Estado: no autenticado</div>
+
+  <div class="box" id="loginBox">
+    <h3>Login</h3>
+    <input id="correo" placeholder="Correo" value="admin@hostaltucan.com" />
+    <input id="clave" placeholder="Clave" type="password" value="12345" />
+    <button onclick="login()">Iniciar sesión</button>
+    <button onclick="logout()">Cerrar sesión</button>
+    <div><small>Token (guardado en localStorage)</small></div>
+    <pre id="loginRes"></pre>
+  </div>
+
+  <div class="box" id="roleBox" style="display:none">
+    <h3>Usuario autenticado</h3>
+    <div id="userInfo"></div>
+  </div>
+
+  <!-- Admin: crear usuario -->
+  <div class="box" id="createUserBox" style="display:none">
+    <h3>Crear usuario (admin)</h3>
+    <label>Nombre<input id="new_nombre" /></label>
+    <label>Correo<input id="new_correo" /></label>
+    <label>Clave<input id="new_clave" type="password" /></label>
+    <label>Perfil (1=Admin,2=Supervisor,3=Empleado,4=Cliente)
+      <input id="new_perfil" value="4" />
+    </label>
+    <button onclick="createUser()">Crear usuario</button>
+    <pre id="createUserRes"></pre>
+  </div>
+
+  <!-- Empleado: registrar reserva -->
+  <div class="box" id="createReservaBox" style="display:none">
+    <h3>Registrar reserva (empleado)</h3>
+    <label>Fecha (YYYY-MM-DD)<input id="res_fecha" placeholder="2025-10-20" /></label>
+    <label>Cliente ID (numérico) <input id="res_cliente_id" placeholder="cliente_id" /></label>
+    <label>Supervisor ID (opcional) <input id="res_supervisor_id" placeholder="supervisor_id (opcional)" /></label>
+    <button onclick="registrarReserva()">Registrar reserva</button>
+    <pre id="createReservaRes"></pre>
+    <div class="small">Nota: en este demo debes conocer o crear previamente IDs en la tabla <code>cliente</code>.</div>
+  </div>
+
+  <!-- Consultar reservas -->
+  <div class="box" id="consultarReservasBox" style="display:none">
+    <h3>Consultar reservas</h3>
+    <button onclick="consultarReservas()">Listar reservas</button>
+    <pre id="reservasRes"></pre>
+  </div>
+
+  <!-- Editar reserva -->
+  <div class="box" id="editarReservaBox" style="display:none">
+    <h3>Editar reserva (empleado/supervisor)</h3>
+    <label>Reserva ID <input id="edit_res_id" /></label>
+    <label>Nueva fecha (YYYY-MM-DD) <input id="edit_res_fecha" /></label>
+    <button onclick="editarReserva()">Editar reserva</button>
+    <pre id="editReservaRes"></pre>
+  </div>
+
+<script>
+const API = 'http://127.0.0.1:5000';
+
+function parseJwt(token) {
+  if (!token) return null;
+  try {
+    const payload = token.split('.')[1];
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(decodeURIComponent(escape(json)));
+  } catch (e) {
+
+    try { return JSON.parse(atob(payload)); } catch { return null; }
+  }
+}
+
+function getIdentityFromToken(token) {
+  if (!token) return null;
+  const p = parseJwt(token);
+  if (!p) return null;
+  if (p.identity) {
+    try { return JSON.parse(p.identity); } catch { return p.identity; }
+  }
+  if (p.sub) return p.sub;
+  return p;
+}
+
+// Mostrar u ocultar áreas según rol
+function updateUI() {
+  const token = localStorage.getItem('access_token');
+  const statusDiv = document.getElementById('status');
+  const userInfoDiv = document.getElementById('userInfo');
+  if (!token) {
+    statusDiv.textContent = 'Estado: no autenticado';
+    document.getElementById('roleBox').style.display = 'none';
+    document.getElementById('createUserBox').style.display = 'none';
+    document.getElementById('createReservaBox').style.display = 'none';
+    document.getElementById('consultarReservasBox').style.display = 'none';
+    document.getElementById('editarReservaBox').style.display = 'none';
+    return;
+  }
+  const identity = getIdentityFromToken(token) || {};
+  statusDiv.textContent = `Autenticado como: ${identity.correo || 'usuario'} (perfil_id=${identity.perfil_id})`;
+  document.getElementById('roleBox').style.display = 'block';
+  userInfoDiv.textContent = JSON.stringify(identity, null, 2);
+
+  // Admin (perfil_id == 1)
+  if (identity.perfil_id == 1) {
+    document.getElementById('createUserBox').style.display = 'block';
+  } else {
+    document.getElementById('createUserBox').style.display = 'none';
+  }
+
+  // Empleado (perfil_id == 3) -> puede registrar reservas
+  if (identity.perfil_id == 3) {
+    document.getElementById('createReservaBox').style.display = 'block';
+  } else {
+    document.getElementById('createReservaBox').style.display = 'none';
+  }
+
+  // Supervisores, empleados, clientes pueden consultar reservas (2,3,4)
+  if ([2,3,4].includes(identity.perfil_id)) {
+    document.getElementById('consultarReservasBox').style.display = 'block';
+  } else {
+    document.getElementById('consultarReservasBox').style.display = 'none';
+  }
+
+  // Empleado y supervisor pueden editar reservas (2,3)
+  if ([2,3].includes(identity.perfil_id)) {
+    document.getElementById('editarReservaBox').style.display = 'block';
+  } else {
+    document.getElementById('editarReservaBox').style.display = 'none';
+  }
+}
+
+async function login(){
+  document.getElementById('loginRes').textContent = '...';
+  const correo = document.getElementById('correo').value;
+  const clave = document.getElementById('clave').value;
+  try {
+    const res = await fetch(API + '/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({correo, clave})
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.msg || JSON.stringify(json));
+    localStorage.setItem('access_token', json.access_token);
+    document.getElementById('loginRes').textContent = 'OK - token guardado';
+    updateUI();
+  } catch (e) {
+    document.getElementById('loginRes').textContent = 'Error: ' + e.message;
+  }
+}
+
+function logout(){
+  localStorage.removeItem('access_token');
+  updateUI();
+}
+
+// --- Admin: crear usuario
+async function createUser(){
+  document.getElementById('createUserRes').textContent = '...';
+  const token = localStorage.getItem('access_token');
+  const nombre = document.getElementById('new_nombre').value;
+  const correo = document.getElementById('new_correo').value;
+  const clave = document.getElementById('new_clave').value;
+  const perfil_id = parseInt(document.getElementById('new_perfil').value || '4');
+  try {
+    const res = await fetch(API + '/usuarios', {
+      method: 'POST',
+      headers: {
+        'Content-Type':'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({nombre, correo, clave, perfil_id})
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.msg || JSON.stringify(json));
+    document.getElementById('createUserRes').textContent = 'Usuario creado';
+  } catch (e) {
+    document.getElementById('createUserRes').textContent = 'Error: ' + e.message;
+  }
+}
+
+// --- Registrar reserva (empleado)
+async function registrarReserva(){
+  document.getElementById('createReservaRes').textContent = '...';
+  const token = localStorage.getItem('access_token');
+  const fecha = document.getElementById('res_fecha').value;
+  const cliente_id = parseInt(document.getElementById('res_cliente_id').value);
+  const supervisor_id_raw = document.getElementById('res_supervisor_id').value;
+  const supervisor_id = supervisor_id_raw ? parseInt(supervisor_id_raw) : undefined;
+
+  const body = { fecha, cliente_id };
+  if (!isNaN(supervisor_id)) body.supervisor_id = supervisor_id;
+
+  try {
+    const res = await fetch(API + '/reservas', {
+      method: 'POST',
+      headers: {
+        'Content-Type':'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify(body)
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.msg || JSON.stringify(json));
+    document.getElementById('createReservaRes').textContent = 'Reserva creada';
+  } catch (e) {
+    document.getElementById('createReservaRes').textContent = 'Error: ' + e.message;
+  }
+}
+
+// --- Consultar reservas
+async function consultarReservas(){
+  document.getElementById('reservasRes').textContent = '...';
+  const token = localStorage.getItem('access_token');
+  try {
+    const res = await fetch(API + '/reservas', {
+      method: 'GET',
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.msg || JSON.stringify(json));
+    document.getElementById('reservasRes').textContent = JSON.stringify(json, null, 2);
+  } catch (e) {
+    document.getElementById('reservasRes').textContent = 'Error: ' + e.message;
+  }
+}
+
+// --- Editar reserva
+async function editarReserva(){
+  document.getElementById('editReservaRes').textContent = '...';
+  const token = localStorage.getItem('access_token');
+  const id = parseInt(document.getElementById('edit_res_id').value);
+  const fecha = document.getElementById('edit_res_fecha').value;
+  try {
+    const res = await fetch(API + '/reservas/' + id, {
+      method: 'PUT',
+      headers: {
+        'Content-Type':'application/json',
+        'Authorization': 'Bearer ' + token
+      },
+      body: JSON.stringify({ fecha })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.msg || JSON.stringify(json));
+    document.getElementById('editReservaRes').textContent = 'Reserva actualizada';
+  } catch (e) {
+    document.getElementById('editReservaRes').textContent = 'Error: ' + e.message;
+  }
+}
+
+updateUI();
+</script>
+</body>
+</html>
